@@ -63,6 +63,8 @@ async def messages(req: Request) -> Response:
     try:
         data = await req.json()
         text = data.get("text", "")
+        if not text:
+            return await ADAPTER.process(req, BOT)
         print(f"Original Text: {text}")
         reversed_text = text[::-1]
         print(f"Reversed Text: {reversed_text}")
