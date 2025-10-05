@@ -3,37 +3,107 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics.pairwise import cosine_similarity
 import re
-
+import os
+import json
 class FIFAPlayerRecommendationSystem:
     def __init__(self, csv_file_path):
         """Initialize the recommendation system with FIFA player data"""
-        self.df = pd.read_csv(csv_file_path)
+        self.df = pd.read_csv(csv_file_path, low_memory=False)
         self.scaler = StandardScaler()
         self.similarity_matrix = None
         self.feature_columns = []
+        self.weights_file = "feature_weights.json"
+        self.feedback_file = "user_feedback.json"
+        self.feature_weights = None
         self.prepare_data()
-    
-    def get_position_weights(position_category):
-        """Return feature weights based on position"""
-        if position_category == 'Forward':
-            return {
-                'pace': 1.5,
-                'shooting': 2.0,
-                'dribbling': 1.5,
-                'passing': 1.0,
-                'defending': 0.3,
-                'physic': 1.0
-            }
-        elif position_category == 'Defender':
-            return {
-                'pace': 1.0,
-                'shooting': 0.3,
-                'dribbling': 0.5,
-                'passing': 1.0,
-                'defending': 2.0,
-                'physic': 1.5
-            }
         
+    def load_feature_weights(self):
+        """Load feature weights from JSON file or initialize with equal weights"""
+        try:
+            if os.path.exists(self.weights_file):
+                with open(self.weights_file, 'r') as f:
+                    self.feature_weights = json.load(f)
+            else:
+                # Initialize with equal weights
+                self.feature_weights = {feature: 1.0/len(self.feature_columns) 
+                                     for feature in self.feature_columns}
+                self.save_feature_weights()
+        except Exception as e:
+            print(f"Error loading weights: {str(e)}")
+            # Fallback to equal weights
+            self.feature_weights = {feature: 1.0/len(self.feature_columns) 
+                                 for feature in self.feature_columns}
+
+    def save_feature_weights(self):
+        """Save current feature weights to JSON file"""
+        import json
+        try:
+            with open(self.weights_file, 'w') as f:
+                json.dump(self.feature_weights, f, indent=4)
+        except Exception as e:
+            print(f"Error saving weights: {str(e)}")
+
+    def normalize_weights(self):
+        """Normalize weights to sum to 1.0"""
+        if not self.feature_weights:
+            return
+            
+        total = sum(self.feature_weights.values())
+        if total > 0:
+            self.feature_weights = {k: v/total for k, v in self.feature_weights.items()}
+            
+    def store_feedback(self, selected_player, recommended_players, feedback):
+        """Store user feedback for recommendations"""
+        feedback_entry = {
+            "timestamp": str(pd.Timestamp.now()),
+            "selected_player": selected_player,
+            "recommended_players": recommended_players,
+            "feedback": feedback
+        }
+        
+        try:
+            if os.path.exists(self.feedback_file):
+                with open(self.feedback_file, 'r') as f:
+                    feedback_data = json.load(f)
+            else:
+                feedback_data = []
+                
+            feedback_data.append(feedback_entry)
+            
+            with open(self.feedback_file, 'w') as f:
+                json.dump(feedback_data, f, indent=4)
+        except Exception as e:
+            print(f"Error storing feedback: {str(e)}")
+            
+    def adapt_weights(self, feedback_type):
+        """Adjust feature weights based on user feedback"""
+        # Adaptation rates for different feedback types
+        adaptation_rates = {
+            "Yes": 0.1,      # Increase weights for positive feedback
+            "Partially": 0.05,  # Smaller increase for partial match
+            "No": -0.1       # Decrease weights for negative feedback
+        }
+        
+        if feedback_type not in adaptation_rates:
+            return
+            
+        rate = adaptation_rates[feedback_type]
+        
+        # Adjust weights based on feedback
+        for feature in self.feature_weights:
+            # Apply adjustment while keeping weights positive
+            new_weight = self.feature_weights[feature] * (1 + rate)
+            self.feature_weights[feature] = max(0.01, new_weight)  # Ensure minimum weight of 0.01
+            
+        # Normalize weights after adjustment
+        self.normalize_weights()
+        
+        # Save updated weights
+        self.save_feature_weights()
+        
+        # Recalculate similarity matrix with new weights
+        self.prepare_data()
+
     def prepare_data(self):
         """Prepare and clean the data for recommendations"""
         # Remove players with missing essential data
@@ -60,8 +130,17 @@ class FIFAPlayerRecommendationSystem:
         feature_data = self.df[self.feature_columns].values
         self.normalized_features = self.scaler.fit_transform(feature_data)
         
-        # Calculate similarity matrix
-        self.similarity_matrix = cosine_similarity(self.normalized_features)
+        # Load or initialize feature weights
+        self.load_feature_weights()
+        
+        # Apply weights to normalized features
+        weighted_features = np.multiply(
+            self.normalized_features,
+            np.array([self.feature_weights[col] for col in self.feature_columns])
+        )
+        
+        # Calculate similarity matrix using weighted features
+        self.similarity_matrix = cosine_similarity(weighted_features)
         
     def extract_positions(self, position_string):
         """Extract primary positions from position string"""
@@ -230,15 +309,41 @@ class FIFAPlayerRecommendationSystem:
             feedback = st.radio(
                 "Are these recommendations useful?",
                 ("Yes", "No", "Partially"),
+                index=None,
                 horizontal=True
             )
-            if feedback:
-                st.write("Thank you for your feedback. The system will adapt future results accordingly (simulated learning).")
-            if feedback == "No":
-                st.info("System would decrease the weight of selected features and re-tune similarity measures in future versions.")
-            elif feedback == "Yes":
-                st.success("System would reinforce feature weightings that contributed most to the recommendation success.")
-
+            try: 
+                if feedback:
+                    # Store feedback and adapt weights
+                    if not recs.empty and len(scores) > 0:
+                        recommended_list = [{"name": row['short_name'], "similarity": score} 
+                                        for (_, row), score in zip(recs.iterrows(), scores)]
+                        self.store_feedback(selected_player, recommended_list, feedback)
+                        self.adapt_weights(feedback)
+                        st.write("Thank you! The system has adapted based on your feedback.")
+                    
+                    # Display current feature weights
+                    st.subheader("🎯 Current Feature Weights")
+                    weights_df = pd.DataFrame(list(self.feature_weights.items()), 
+                                            columns=['Feature', 'Weight'])
+                    weights_df = weights_df.sort_values('Weight', ascending=False)
+                    
+                    # Show top 10 most influential features
+                    st.bar_chart(weights_df.set_index('Feature').head(10))
+                    
+                    if st.button("Reset Weights to Default"):
+                        # Reset weights to equal distribution
+                        self.feature_weights = {feature: 1.0/len(self.feature_columns) 
+                                            for feature in self.feature_columns}
+                        self.save_feature_weights()
+                        self.prepare_data()
+                        st.success("Weights have been reset to default values.")
+                if feedback == "No":
+                    st.info("System would decrease the weight of selected features and re-tune similarity measures in future versions.")
+                elif feedback == "Yes":
+                    st.success("System would reinforce feature weightings that contributed most to the recommendation success.")
+            except Exception:
+                st.write("❌ Error saving feedback. Please try again later!")
         st.markdown("---")
         st.markdown("#### ⚖️ Ethical & Human-Centered AI Note")
         st.write("""

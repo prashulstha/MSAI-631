@@ -1,0 +1,29 @@
+[
+    {
+        "timestamp": "2025-10-05 19:40:02.702321",
+        "selected_player": "J. Bellingham",
+        "recommended_players": [
+            {
+                "name": "Sancet",
+                "similarity": 0.9859979466476793
+            },
+            {
+                "name": "R. Gravenberch",
+                "similarity": 0.9842051297420024
+            },
+            {
+                "name": "M. Rogers",
+                "similarity": 0.9820947752406018
+            },
+            {
+                "name": "C. Jones",
+                "similarity": 0.980788003023836
+            },
+            {
+                "name": "T. Reijnders",
+                "similarity": 0.9801999440897614
+            }
+        ],
+        "feedback": "Yes"
+    }
+]
