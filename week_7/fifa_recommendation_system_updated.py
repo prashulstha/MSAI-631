@@ -12,6 +12,27 @@ class FIFAPlayerRecommendationSystem:
         self.similarity_matrix = None
         self.feature_columns = []
         self.prepare_data()
+    
+    def get_position_weights(position_category):
+        """Return feature weights based on position"""
+        if position_category == 'Forward':
+            return {
+                'pace': 1.5,
+                'shooting': 2.0,
+                'dribbling': 1.5,
+                'passing': 1.0,
+                'defending': 0.3,
+                'physic': 1.0
+            }
+        elif position_category == 'Defender':
+            return {
+                'pace': 1.0,
+                'shooting': 0.3,
+                'dribbling': 0.5,
+                'passing': 1.0,
+                'defending': 2.0,
+                'physic': 1.5
+            }
         
     def prepare_data(self):
         """Prepare and clean the data for recommendations"""
@@ -140,84 +161,91 @@ class FIFAPlayerRecommendationSystem:
               f"Defending: {player['defending']:.0f}, Physical: {player['physic']:.0f}")
         print("-" * 50)
     
-    def run_console_app(self):
-        """Run the interactive console application"""
-        print("=== FIFA Player Recommendation System ===")
-        print(f"Loaded {len(self.df)} players from the database")
-        print("Type 'quit' to exit the application\n")
-        
-        while True:
-            # Get user input
-            player_name = input("Enter a player name to search: ").strip()
-            
-            if player_name.lower() in ['quit', 'exit', 'q']:
-                print("Thanks for using the FIFA Player Recommendation System!")
-                break
-            
-            if not player_name:
-                print("Please enter a valid player name.\n")
-                continue
-            
-            # Search for the player
-            matches = self.search_player(player_name)
-            
-            if matches.empty:
-                print(f"No players found matching '{player_name}'. Try a different spelling or partial name.\n")
-                continue
-            
-            # If multiple matches, let user choose
-            if len(matches) > 1:
-                print(f"\nFound {len(matches)} players matching '{player_name}':")
-                for i, (idx, player) in enumerate(matches.iterrows()):
-                    print(f"{i+1}. {player['short_name']} - {player['club_name']} - Overall: {player['overall']}")
-                
-                try:
-                    choice = int(input(f"Select a player (1-{len(matches)}): ")) - 1
-                    if 0 <= choice < len(matches):
-                        selected_player = matches.iloc[choice]
-                        player_index = matches.index[choice]
-                    else:
-                        print("Invalid selection.\n")
-                        continue
-                except ValueError:
-                    print("Please enter a valid number.\n")
-                    continue
-            else:
-                selected_player = matches.iloc[0]
-                player_index = matches.index[0]
-            
-            # Display selected player info
-            self.display_player_info(player_index)
-            
-            # Ask for recommendation preferences
-            try:
-                num_recommendations = int(input("How many similar players would you like to see? (default: 5): ") or "5")
-                same_position = input("Only show players in the same position category? (y/n, default: y): ").lower()
-                same_position_only = same_position != 'n'
-            except ValueError:
-                num_recommendations = 5
-                same_position_only = True
-            
-            # Get and display recommendations
-            similar_players = self.get_similar_players(player_index, num_recommendations, same_position_only)
-            
-            if not similar_players:
-                print("No similar players found with the specified criteria.\n")
-                continue
-            
-            print(f"\n=== Top {len(similar_players)} Similar Players ===")
-            for i, (idx, similarity_score) in enumerate(similar_players):
-                similar_player = self.df.iloc[idx]
-                positions = self.extract_positions(similar_player['player_positions'])
-                
-                print(f"\n{i+1}. {similar_player['short_name']} (Similarity: {similarity_score:.3f})")
-                print(f"   Club: {similar_player['club_name'] if pd.notna(similar_player['club_name']) else 'N/A'}")
-                print(f"   Age: {similar_player['age']}, Overall: {similar_player['overall']}, Potential: {similar_player['potential']}")
-                print(f"   Positions: {', '.join(positions) if positions else 'N/A'}")
-                print(f"   Value: €{similar_player['value_eur']:,}" if pd.notna(similar_player['value_eur']) else "   Value: N/A")
-            
-            print("\n" + "="*60 + "\n")
+    def run_gui_app(self):
+        """Run a Streamlit GUI for player recommendations (resembles fifa_rec_ui.py)"""
+        import streamlit as st
+        # Use short_name for selection, fallback to long_name if needed
+        st.set_page_config(page_title="AI Adaptive Recommender", layout="wide")
+        st.title("⚽ Adaptive Player Recommendation System")
+        st.write("""
+        This intelligent system uses **AI-based adaptive interaction** to recommend football players similar to your selection.  
+        It adapts the interface, explanations, and visuals dynamically based on similarity confidence and user feedback.
+        """)
 
+        with st.sidebar:
+            st.header("🔎 Choose Player")
+            player_names = self.df['short_name'].dropna().unique()
+            selected_player = st.selectbox("Select a player:", player_names)
+            num_recommendations = st.slider("Number of Recommendations:", 3, 10, 5)
+
+        def get_recommendations(player_name, top_n=5):
+            matches = self.df[self.df['short_name'] == player_name]
+            if matches.empty:
+                return [], []
+            idx = matches.index[0]
+            recs = self.get_similar_players(idx, num_recommendations=top_n, same_position_only=True)
+            if not recs:
+                return [], []
+            indices, scores = zip(*recs)
+            return self.df.iloc[list(indices)], list(scores)
+
+        if selected_player:
+            recs, scores = get_recommendations(selected_player, num_recommendations)
+            selected_idx = self.df[self.df['short_name'] == selected_player].index[0]
+            selected_features = self.df.loc[selected_idx, self.feature_columns]
+
+            # Adaptive Feedback Section
+            import numpy as np
+            avg_similarity = np.mean(scores) if scores else 0
+            if avg_similarity > 0.8:
+                st.success(f"✅ High confidence recommendations for **{selected_player}** (Avg. similarity: {avg_similarity:.2f})")
+            elif 0.6 <= avg_similarity <= 0.8:
+                st.warning(f"⚠️ Moderate similarity detected. Some results may differ in playstyle.")
+            else:
+                st.error(f"❌ Low similarity found. Consider adjusting feature weights.")
+
+            # Show Recommendations
+            st.subheader("🏆 Recommended Players")
+            for i, (index, score) in enumerate(zip(recs.index if hasattr(recs, 'index') else [], scores)):
+                player_info = self.df.loc[index]
+                st.markdown(f"**{i+1}. {player_info['short_name']}** — Similarity: `{score:.2f}`")
+                st.progress(float(score))
+                st.caption(f"Position: {player_info.get('player_positions', 'N/A')} | Club: {player_info.get('club_name', 'Unknown')}")
+
+            # Comparison Dashboard
+            st.subheader("📊 Compare Attributes")
+            if hasattr(recs, 'short_name') and not recs.empty:
+                compare_player = st.selectbox("Compare selected player with:", recs['short_name'])
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f"### {selected_player}")
+                    st.bar_chart(selected_features)
+                with col2:
+                    st.markdown(f"### {compare_player}")
+                    compare_features = self.df.loc[self.df['short_name'] == compare_player, self.feature_columns].T
+                    st.bar_chart(compare_features)
+
+            # User Feedback (Adaptive Learning Stub)
+            st.subheader("💬 Provide Feedback")
+            feedback = st.radio(
+                "Are these recommendations useful?",
+                ("Yes", "No", "Partially"),
+                horizontal=True
+            )
+            if feedback:
+                st.write("Thank you for your feedback. The system will adapt future results accordingly (simulated learning).")
+            if feedback == "No":
+                st.info("System would decrease the weight of selected features and re-tune similarity measures in future versions.")
+            elif feedback == "Yes":
+                st.success("System would reinforce feature weightings that contributed most to the recommendation success.")
+
+        st.markdown("---")
+        st.markdown("#### ⚖️ Ethical & Human-Centered AI Note")
+        st.write("""
+        This system demonstrates **AI-based Adaptive Human-Computer Interaction (HCI)**, where the interface adapts based on context, confidence, and feedback.
+        Such systems must remain transparent, user-controllable, and explainable to maintain ethical integrity in AI-assisted recommendations.
+        """)
+    
 def main():
     # Initialize the recommendation system
     try:
@@ -227,8 +255,8 @@ def main():
         print("Loading FIFA player data...")
         recommender = FIFAPlayerRecommendationSystem(csv_file_path)
         
-        # Run the console application
-        recommender.run_console_app()
+        # Run the GUI application
+        recommender.run_gui_app()
         
     except FileNotFoundError:
         print("Error: Could not find the CSV file. Please make sure 'FC26_20250921.csv' is in the same directory as this script.")
